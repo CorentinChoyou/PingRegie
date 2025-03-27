@@ -4,7 +4,6 @@ import { Server } from 'socket.io';
 const httpServer = createServer();
 const io = new Server(httpServer, {
   cors: {
-    // Allow connections from any origin in production
     origin: process.env.NODE_ENV === 'production' 
       ? '*'
       : "http://localhost:5173",
@@ -12,51 +11,47 @@ const io = new Server(httpServer, {
   }
 });
 
-const rooms = new Map();
-
-function generateRoomId() {
-  return Math.floor(1000 + Math.random() * 9000).toString();
-}
+// Store current state of signals
+const signalStates = {
+  A: false,
+  B: false,
+  C: false
+};
 
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
 
-  socket.on("create_room", () => {
-    let roomId;
-    // Ensure unique room ID
-    do {
-      roomId = generateRoomId();
-    } while (rooms.has(roomId));
+  // Send current state to newly connected clients
+  socket.emit("initial_state", signalStates);
 
-    rooms.set(roomId, { sender: socket.id, receiver: null });
-    socket.join(roomId);
-    socket.emit("room_created", roomId);
-  });
+  socket.on("signal", (signal) => {
+    console.log("Received signal from client:", signal);
+    
+    // Update signal state
+    signalStates[signal.type] = signal.active;
+    console.log("Updated signal states:", signalStates);
+    
+    // Broadcast to all clients including sender
+    io.emit("signal", {
+      type: signal.type,
+      active: signal.active,
+      timestamp: new Date().toISOString()
+    });
 
-  socket.on("join_room", (roomId) => {
-    const room = rooms.get(roomId);
-    if (room && !room.receiver) {
-      room.receiver = socket.id;
-      socket.join(roomId);
-      socket.emit("room_joined", roomId);
-      io.to(roomId).emit("connection_established");
-    } else {
-      socket.emit("error", "Room not found or already full");
-    }
-  });
-
-  socket.on("signal", ({ roomId, signal }) => {
-    socket.to(roomId).emit("signal_received", signal);
+    // Set timeout to deactivate the signal after 3 seconds
+    setTimeout(() => {
+      signalStates[signal.type] = false;
+      console.log("Deactivating signal:", signal.type);
+      io.emit("signal", {
+        type: signal.type,
+        active: false,
+        timestamp: new Date().toISOString()
+      });
+    }, 3000);
   });
 
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
-    rooms.forEach((room, roomId) => {
-      if (room.sender === socket.id || room.receiver === socket.id) {
-        io.to(roomId).emit("peer_disconnected");
-        rooms.delete(roomId);
-      }
-    });
   });
 });
 
